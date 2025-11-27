@@ -1,53 +1,70 @@
-//
-//  SceneDelegate.swift
-//  Shaders
-//
-//  Created by Ювеналий on 27.11.2025.
-//
+/// SceneDelegate.swift
+/// Делегат сцены для управления окном приложения.
+///
+/// Отвечает за:
+/// - Создание и настройку главного окна.
+/// - Интеграцию SwiftUI с UIKit.
+/// - Обработку переходов между состояниями сцены.
 
 import SwiftUI
 import UIKit
+import os
 
+/// Делегат сцены приложения.
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
-
+    
     var window: UIWindow?
-
-
-    func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
-        guard let windowScene = scene as? UIWindowScene else { return }
+    private let log = Logger(subsystem: "com.liquidintro", category: "scene")
+    
+    // MARK: - Scene Lifecycle
+    
+    func scene(
+        _ scene: UIScene,
+        willConnectTo session: UISceneSession,
+        options connectionOptions: UIScene.ConnectionOptions
+    ) {
+        log.debug("Сцена подключается к сессии")
+        
+        guard let windowScene = scene as? UIWindowScene else {
+            log.error("Не удалось получить UIWindowScene")
+            return
+        }
+        
+        // Создаём окно
         let window = UIWindow(windowScene: windowScene)
-        window.rootViewController = UIHostingController(rootView: ParticleMagicView())
+        
+        // Устанавливаем корневой контроллер с SwiftUI view
+        let rootView = ParticleMagicView()
+        window.rootViewController = UIHostingController(rootView: rootView)
+        
+        // Настраиваем окно
         window.makeKeyAndVisible()
         self.window = window
+        
+        log.debug("Окно создано и отображено")
     }
-
+    
     func sceneDidDisconnect(_ scene: UIScene) {
-        // Called as the scene is being released by the system.
-        // This occurs shortly after the scene enters the background, or when its session is discarded.
-        // Release any resources associated with this scene that can be re-created the next time the scene connects.
-        // The scene may re-connect later, as its session was not necessarily discarded (see `application:didDiscardSceneSessions` instead).
+        log.debug("Сцена отключена")
+        // Освобождаем ресурсы, специфичные для этой сцены
     }
-
+    
     func sceneDidBecomeActive(_ scene: UIScene) {
-        // Called when the scene has moved from an inactive state to an active state.
-        // Use this method to restart any tasks that were paused (or not yet started) when the scene was inactive.
+        log.debug("Сцена стала активной")
+        // Возобновляем приостановленные задачи
     }
-
+    
     func sceneWillResignActive(_ scene: UIScene) {
-        // Called when the scene will move from an active state to an inactive state.
-        // This may occur due to temporary interruptions (ex. an incoming phone call).
+        log.debug("Сцена становится неактивной")
+        // Приостанавливаем задачи при переходе в фон
     }
-
+    
     func sceneWillEnterForeground(_ scene: UIScene) {
-        // Called as the scene transitions from the background to the foreground.
-        // Use this method to undo the changes made on entering the background.
+        log.debug("Сцена переходит на передний план")
     }
-
+    
     func sceneDidEnterBackground(_ scene: UIScene) {
-        // Called as the scene transitions from the foreground to the background.
-        // Use this method to save data, release shared resources, and store enough scene-specific state information
-        // to restore the scene back to its current state.
+        log.debug("Сцена перешла в фон")
+        // Сохраняем состояние при необходимости
     }
-
-
 }

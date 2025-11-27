@@ -3,6 +3,7 @@
 
 # Build products
 /DerivedData
+/DerivedDataLocal
 build/
 .build/
 
@@ -19,6 +20,7 @@ Packages/
 
 # Xcode caches
 *.hmap
+.swift-module-cache/
 
 # App packaging
 *.ipa
