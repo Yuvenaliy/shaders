@@ -17,6 +17,7 @@
 /// ```
 
 import AVFoundation
+import AudioToolbox
 import os
 
 // MARK: - Логгер модуля
@@ -198,7 +199,6 @@ final class LoFiEngine {
     
     // MARK: - Audio компоненты
     private let engine = AVAudioEngine()
-    private var sequencer: AVAudioSequencer?
     private let kickSampler = AVAudioUnitSampler()
     private let snareSampler = AVAudioUnitSampler()
     private let hatSampler = AVAudioUnitSampler()
@@ -207,9 +207,12 @@ final class LoFiEngine {
     private var settings: EngineSettings
     private var isPrepared = false
     private var isRunning = false
+    private var stepTimer: DispatchSourceTimer?
+    private var stepCounter: Int = 0
     
     // MARK: - Метрики для рендера
     private var lastStepIndex: Int = -1
+    private var lastStepTimestamp: CFTimeInterval = 0
     private var kickImpulse: Float = 0
     private var snareImpulse: Float = 0
     private var rawRMS: Float = 0
@@ -253,9 +256,10 @@ final class LoFiEngine {
             groove: parameters.groove,
             preset: parameters.preset
         )
-        sequencer = nil
         isPrepared = false
         isRunning = false
+        stepTimer?.cancel()
+        stepTimer = nil
         startIfNeeded()
     }
     
@@ -284,7 +288,8 @@ final class LoFiEngine {
     func stop() {
         guard isRunning else { return }
         
-        sequencer?.stop()
+        stepTimer?.cancel()
+        stepTimer = nil
         engine.stop()
         engine.mainMixerNode.removeTap(onBus: 0)
         
@@ -299,30 +304,8 @@ final class LoFiEngine {
         // Ленивый запуск
         startIfNeeded()
         
-        guard let sequencer = sequencer, isRunning else {
+        guard isRunning else {
             return .silent
-        }
-        
-        // Позиция в битах (1 бит = 1 четвертная нота)
-        let beatPosition = sequencer.currentPositionInBeats
-        
-        // Текущий шаг (16th note)
-        let stepDurationBeats = 0.25  // 1/4 бита = 16th нота
-        let stepIndex = Int(floor(beatPosition / stepDurationBeats)) % 16
-        
-        // Детекция новых ударов
-        if stepIndex != lastStepIndex {
-            // Kick
-            if kickPattern.contains(stepIndex) {
-                kickImpulse = 1.0
-                log.debug("KICK на шаге \(stepIndex)")
-            }
-            // Snare
-            if snarePattern.contains(stepIndex) {
-                snareImpulse = 1.0
-                log.debug("SNARE на шаге \(stepIndex)")
-            }
-            lastStepIndex = stepIndex
         }
         
         // ИСПРАВЛЕНО: Корректное экспоненциальное затухание
@@ -335,10 +318,13 @@ final class LoFiEngine {
         smoothedRMS = mix(smoothedRMS, rawRMS, rmsSmoothingFactor)
         
         // Фаза внутри бита для пульсации
-        let beatPhase = Float(beatPosition.truncatingRemainder(dividingBy: 1.0))
+        let now = CACurrentMediaTime()
+        let elapsed = lastStepTimestamp > 0 ? now - lastStepTimestamp : 0
+        let beatPhase = Float(min(max(elapsed / settings.stepDurationSeconds, 0), 1))
         
         // Номер такта
-        let barIndex = Int(floor(beatPosition / 4.0))
+        let barIndex = stepCounter / 16
+        let stepIndex = lastStepIndex
         
         return AudioReactiveSnapshot(
             amplitude: min(smoothedRMS * 2.5, 1.0),  // Нормализация с усилением
@@ -395,76 +381,9 @@ final class LoFiEngine {
         }
     }
     
-    /// Настраивает MIDI секвенцер с паттерном.
+    /// Настраивает таймерный паттерн вместо MIDI секвенсера.
     private func setupSequencer() {
-        let seq = AVAudioSequencer(audioEngine: engine)
-        self.sequencer = seq
-        
-        // Создаём треки для каждого инструмента
-        guard let kickTrack = seq.newTrack(),
-              let snareTrack = seq.newTrack(),
-              let hatTrack = seq.newTrack() else {
-            log.error("Не удалось создать MIDI треки")
-            return
-        }
-        
-        // Привязываем треки к сэмплерам
-        kickTrack.destinationAudioUnit = kickSampler
-        snareTrack.destinationAudioUnit = snareSampler
-        hatTrack.destinationAudioUnit = hatSampler
-        
-        // Добавляем ноты в паттерн
-        let stepDuration: MusicTimeStamp = 0.25  // 16th нота
-        let swingAmount = settings.groove * 0.08  // Свинг для нечётных шагов
-        
-        for step in 0..<16 {
-            // Свинг: нечётные шаги немного сдвигаются вперёд
-            let swingOffset: MusicTimeStamp = (step % 2 == 1) ? swingAmount : 0
-            let position = MusicTimeStamp(Double(step) * stepDuration + swingOffset)
-            
-            // Kick
-            if kickPattern.contains(step) {
-                kickTrack.addMIDINoteEvent(
-                    note: 36,  // C1 (стандарт для kick)
-                    velocity: 110,
-                    channel: 0,
-                    position: position,
-                    duration: stepDuration * 0.9
-                )
-            }
-            
-            // Snare
-            if snarePattern.contains(step) {
-                snareTrack.addMIDINoteEvent(
-                    note: 38,  // D1 (стандарт для snare)
-                    velocity: 120,
-                    channel: 1,
-                    position: position,
-                    duration: stepDuration * 0.7
-                )
-            }
-            
-            // Hi-hat на каждый шаг
-            hatTrack.addMIDINoteEvent(
-                note: 42,  // F#1 (closed hi-hat)
-                velocity: UInt8(step % 4 == 0 ? 80 : 60),  // Акцент на сильные доли
-                channel: 2,
-                position: position,
-                duration: stepDuration * 0.2
-            )
-        }
-        
-        // Настройка зацикливания
-        [kickTrack, snareTrack, hatTrack].forEach { track in
-            track.setLoopInfo(duration: 4.0, numberOfLoops: AVMusicTrackLoopCountForever)
-        }
-        
-        // Настройка темпа
-        seq.currentPositionInBeats = 0
-        seq.rate = Float(settings.bpm / 120.0)  // 120 BPM = базовый темп
-        seq.prepareToPlay()
-        
-        log.debug("Секвенсер настроен: \(kickPattern.count) kick, \(snarePattern.count) snare, 16 hi-hat")
+        log.debug("Таймерный паттерн для ударных настроен")
     }
     
     /// Устанавливает tap на миксер для измерения RMS.
@@ -478,7 +397,7 @@ final class LoFiEngine {
         }
     }
     
-    /// Запускает AVAudioEngine и секвенцер.
+    /// Запускает AVAudioEngine и таймер.
     private func startEngine() -> Bool {
         do {
             // Настройка аудио-сессии
@@ -488,13 +407,49 @@ final class LoFiEngine {
             
             // Запуск движка
             try engine.start()
-            try sequencer?.start()
+            startStepTimer()
             
             return true
         } catch {
             log.error("Ошибка запуска аудио: \(error.localizedDescription)")
             return false
         }
+    }
+
+    private func startStepTimer() {
+        stepTimer?.cancel()
+        stepTimer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "com.liquidintro.lofi.step", qos: .userInitiated))
+        let interval = settings.stepDurationSeconds
+        stepCounter = 0
+        lastStepIndex = -1
+        lastStepTimestamp = CACurrentMediaTime()
+        stepTimer?.schedule(deadline: .now(), repeating: interval)
+        stepTimer?.setEventHandler { [weak self] in
+            self?.performStep()
+        }
+        stepTimer?.resume()
+    }
+    
+    private func performStep() {
+        let step = stepCounter % 16
+        lastStepIndex = step
+        lastStepTimestamp = CACurrentMediaTime()
+        
+        if kickPattern.contains(step) {
+            kickImpulse = 1.0
+            kickSampler.startNote(36, withVelocity: 110, onChannel: 0)
+            log.debug("KICK на шаге \(step)")
+        }
+        if snarePattern.contains(step) {
+            snareImpulse = 1.0
+            snareSampler.startNote(38, withVelocity: 120, onChannel: 1)
+            log.debug("SNARE на шаге \(step)")
+        }
+        // Hi-hat на каждый шаг
+        let hatVelocity: UInt8 = step % 4 == 0 ? 80 : 60
+        hatSampler.startNote(42, withVelocity: hatVelocity, onChannel: 2)
+        
+        stepCounter += 1
     }
     
     /// Вычисляет RMS (среднеквадратичное значение) буфера.

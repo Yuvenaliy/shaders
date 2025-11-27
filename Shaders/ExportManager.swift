@@ -17,6 +17,7 @@ import Metal
 import MetalKit
 import AVFoundation
 import Photos
+import VideoToolbox
 import QuartzCore
 import os
 
